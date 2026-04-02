@@ -1,1 +1,82 @@
+name: Tailscale - Docker - Windows Server 2022 Auto
 
+on:
+  workflow_dispatch:
+    inputs:
+      link_iso:
+        description: 'Dán link iso Windows Server 2022'
+        required: true
+  repository_dispatch:
+    types: [rerun_event]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: chuẩn bị phần mềm
+        run: |
+          sudo apt update -y
+          sudo apt install wget curl unzip -y
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: cài win và khởi chạy Docker
+        run: |
+          sudo chmod 666 /dev/kvm
+          sudo mkdir -p /isos/
+          LINK_ISO="${{ github.event.inputs.link_iso || github.event.client_payload.link_iso }}"
+          sudo wget -O /isos/a.iso "$LINK_ISO" &>/dev/null &
+          sudo wget -O /isos/driver.iso https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.240-1/virtio-win-0.1.240.iso &>/dev/null &
+          wait
+          wget https://raw.githubusercontent.com/socaca/buluxury/refs/heads/main/compose.yaml
+          tailscale ip -4
+          sudo docker compose up -d
+
+      - name: Tải - Cài đặt - Cấu hình Proxy & EarnApp (7 phút chờ)
+        run: |
+          echo "Đang chờ Windows ổn định (7 phút)..."
+          sleep 420
+          
+          # Tự động lấy ID của container
+          CONTAINER_ID=$(sudo docker ps -qf "ancestor=dockurr/windows")
+          echo "Đang làm việc với Container ID: $CONTAINER_ID"
+
+          # 1. Tải bộ cài bằng PowerShell (Sử dụng lệnh trực tiếp để tránh lỗi line 8)
+          sudo docker exec $CONTAINER_ID powershell -Command "Invoke-WebRequest -Uri 'https://github.com/thainguyen3979/Hyper_EarnApp/raw/refs/heads/main/ProxifierSetup.exe' -OutFile 'C:\ProxifierSetup.exe'"
+          sudo docker exec $CONTAINER_ID powershell -Command "Invoke-WebRequest -Uri 'https://github.com/thainguyen3979/Hyper_EarnApp/raw/refs/heads/main/Sandboxie-Plus-x64-v1.17.2.exe' -OutFile 'C:\SandboxieSetup.exe'"
+          sudo docker exec $CONTAINER_ID powershell -Command "Invoke-WebRequest -Uri 'https://github.com/thainguyen3979/Hyper_EarnApp/raw/refs/heads/main/EarnApp.zip' -OutFile 'C:\EarnApp.zip'"
+          sudo docker exec $CONTAINER_ID powershell -Command "Invoke-WebRequest -Uri 'https://github.com/zulajizie/Docker-VNC/raw/refs/heads/main/proxysave.ppx' -OutFile 'C:\proxysave.ppx'"
+          
+          curl -L -o earnapp.settings https://github.com/luseoziju/android-tailscale/raw/refs/heads/main/earnapp.settings
+
+          # 2. Cài đặt Silent
+          sudo docker exec $CONTAINER_ID powershell -Command "Start-Process 'C:\ProxifierSetup.exe' -ArgumentList '/silent' -Wait"
+          sudo docker exec $CONTAINER_ID powershell -Command "Start-Process 'C:\SandboxieSetup.exe' -ArgumentList '/allusers', '/elevate', '/silent' -Wait"
+          sudo docker exec $CONTAINER_ID powershell -Command "Expand-Archive -Path 'C:\EarnApp.zip' -DestinationPath 'C:\Users\Administrator\Downloads\EarnApp' -Force"
+
+          # 3. Cấu hình ID (Sử dụng đúng cơ chế mã hóa đã chọn trong ảnh)
+          sudo docker exec $CONTAINER_ID powershell -Command "New-Item -ItemType Directory -Force -Path 'C:\Sandbox\Administrator\DefaultBox\user\current\AppData\Roaming\EarnApp'"
+          sudo docker cp earnapp.settings $CONTAINER_ID:"C:/Sandbox/Administrator/DefaultBox/user/current/AppData/Roaming/EarnApp/earnapp.settings"
+
+          # 4. Khởi chạy với Profile đã lưu
+          sudo docker exec $CONTAINER_ID powershell -Command "Start-Process 'C:\Program Files\Proxifier\Proxifier.exe' -ArgumentList 'C:\proxysave.ppx', '/silent'"
+          sudo docker exec $CONTAINER_ID powershell -Command "Start-Process 'C:\Program Files\Sandboxie-Plus\SandMan.exe'"
+          
+          sleep 20
+          sudo docker exec $CONTAINER_ID powershell -Command "& 'C:\Program Files\Sandboxie-Plus\Start.exe' /box:DefaultBox 'C:\Users\Administrator\Downloads\EarnApp\EarnApp\earnapp.exe'"
+          
+          echo "Hệ thống đã tự động kích hoạt thành công!"
+
+      - name: Duy trì và Rerun (Vòng lặp 6h)
+        if: always()
+        run: |
+          # Treo máy 353 phút
+          sleep 353m
+          LINK_ISO="${{ github.event.inputs.link_iso || github.event.client_payload.link_iso }}"
+          
+          # Sử dụng MY_TOKEN đã cấu hình trong Secrets
+          curl -X POST \
+          -H "Authorization: token ${{ secrets.MY_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          https://api.github.com/repos/${{ github.repository }}/dispatches \
+          -d "{\"event_type\": \"rerun_event\", \"client_payload\": {\"link_iso\": \"$LINK_ISO\"}}"
