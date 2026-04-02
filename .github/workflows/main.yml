@@ -1,11 +1,12 @@
-name: Tailscale - Docker - Windows Server 2022 Auto
+name: Tailscale - Docker
 
 on:
   workflow_dispatch:
     inputs:
       link_iso:
-        description: 'Dán link iso Windows Server 2022'
+        description: 'Dán link iso của ae vô đây'
         required: true
+  # Cho phép nhận lệnh tự kích hoạt từ chính nó
   repository_dispatch:
     types: [rerun_event]
 
@@ -16,63 +17,46 @@ jobs:
       - name: chuẩn bị phần mềm
         run: |
           sudo apt update -y
-          sudo apt install wget curl unzip -y
+          sudo apt install wget curl -y
           curl -fsSL https://tailscale.com/install.sh | sh
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTHKEY }}
 
-      - name: cài win và khởi chạy Docker
+      - name: cài win và khởi chạy
         run: |
           sudo chmod 666 /dev/kvm
           sudo mkdir -p /isos/
+          
+          # Xác định link ISO (lấy từ nút bấm hoặc từ lần chạy trước truyền sang)
           LINK_ISO="${{ github.event.inputs.link_iso || github.event.client_payload.link_iso }}"
+          
+          # Tải ISO và Driver
           sudo wget -O /isos/a.iso "$LINK_ISO" &>/dev/null &
+          while ps axg | grep -vw grep | grep -w wget > /dev/null; do sleep 1; done
+          
           sudo wget -O /isos/driver.iso https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.240-1/virtio-win-0.1.240.iso &>/dev/null &
-          wait
+          while ps axg | grep -vw grep | grep -w wget > /dev/null; do sleep 1; done
+          
+          # Tải file cấu hình Docker
           wget https://raw.githubusercontent.com/socaca/buluxury/refs/heads/main/compose.yaml
+          
+          # Hiển thị IP để kết nối
+          tailscale ip -4
+          echo "Thành công! Kết nối bằng port 8006 ở trình duyệt Chrome."
+          
+          # Chạy Docker ngầm (-d)
           sudo docker compose up -d
+          
+          # Treo máy trong 5 tiếng 55 phút (355 phút)
+          echo "Đang treo máy... Sẽ tự động khởi tạo lại sau 5h55m."
+          sleep 355m 
 
-      - name: Nạp File và Tự động hóa Startup
-        run: |
-          # 1. Tải các file cần thiết về máy chủ GitHub
-          wget -O ProxifierSetup.exe https://github.com/thainguyen3979/Hyper_EarnApp/raw/refs/heads/main/ProxifierSetup.exe
-          wget -O SandboxieSetup.exe https://github.com/thainguyen3979/Hyper_EarnApp/raw/refs/heads/main/Sandboxie-Plus-x64-v1.17.2.exe
-          wget -O proxysave.ppx https://github.com/zulajizie/Docker-VNC/raw/refs/heads/main/proxysave.ppx
-          curl -L -o earnapp.settings https://github.com/luseoziju/android-tailscale/raw/refs/heads/main/earnapp.settings
-          
-          echo "Đang chờ máy ảo tạo cấu hình thư mục (7 phút)..."
-          sleep 420
-          
-          # Tự động tìm ID container bất kể tên gì
-          CONTAINER_ID=$(sudo docker ps -qf "ancestor=dockurr/windows")
-          
-          # 2. Đẩy bộ cài vào ổ C: của Windows (Dùng docker cp để không bị lỗi PATH)
-          sudo docker cp ProxifierSetup.exe $CONTAINER_ID:/main/C/ProxifierSetup.exe
-          sudo docker cp SandboxieSetup.exe $CONTAINER_ID:/main/C/SandboxieSetup.exe
-          sudo docker cp proxysave.ppx $CONTAINER_ID:/main/C/proxysave.ppx
-          
-          # 3. Tạo file Batch để Windows tự cài đặt khi mở máy
-          echo "@echo off" > install.bat
-          echo "C:\ProxifierSetup.exe /silent" >> install.bat
-          echo "C:\SandboxieSetup.exe /allusers /elevate /silent" >> install.bat
-          echo "timeout /t 20" >> install.bat
-          echo "start \"\" \"C:\Program Files\Proxifier\Proxifier.exe\" \"C:\proxysave.ppx\" /silent" >> install.bat
-          echo "start \"\" \"C:\Program Files\Sandboxie-Plus\SandMan.exe\"" >> install.bat
-          
-          # 4. Đẩy file Batch vào thư mục Startup của Windows
-          sudo docker cp install.bat "$CONTAINER_ID:/main/C/Users/Administrator/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/install.bat"
-          
-          # 5. Nạp sẵn ID EarnApp vào đúng vị trí của Sandbox
-          sudo docker exec $CONTAINER_ID mkdir -p "/main/C/Sandbox/Administrator/DefaultBox/user/current/AppData/Roaming/EarnApp"
-          sudo docker cp earnapp.settings "$CONTAINER_ID:/main/C/Sandbox/Administrator/DefaultBox/user/current/AppData/Roaming/EarnApp/earnapp.settings"
-          
-          echo "Đã nạp kịch bản tự động thành công!"
-
-      - name: Duy trì và Rerun (Vòng lặp 6h)
+      - name: Tự động kích hoạt lượt chạy tiếp theo
         if: always()
         run: |
-          sleep 352m
+          # Lấy lại link ISO để truyền sang lượt chạy sau
           LINK_ISO="${{ github.event.inputs.link_iso || github.event.client_payload.link_iso }}"
-          # Sử dụng MY_TOKEN đã cài đặt trong Secrets
+          
+          # Gửi lệnh cho GitHub tạo một Action mới (Cần có MY_TOKEN trong Secrets)
           curl -X POST \
           -H "Authorization: token ${{ secrets.MY_TOKEN }}" \
           -H "Accept: application/vnd.github.v3+json" \
